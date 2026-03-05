@@ -119,14 +119,32 @@ export default function CRMCapillas() {
     try {
       if(LINK_WEBHOOK_ZAPIER !== "PIDELE_A_ZAPIER_ESTE_LINK_Y_PEGALO_AQUI") {
         
-        // --- MAGIA NUEVA: PREPARAMOS TODO PARA ZAPIER ---
         const tituloParaCalendario = `${cita.asesor} - ${cita.cliente}`; 
-        
-        // Forzamos la hora a las 7:00 AM y que termine a las 8:00 AM (Hora Colombia -05:00)
-        // Usamos cita.seguimiento porque es la fecha nueva que puso el asesor
         const horaInicio7AM = `${cita.seguimiento}T07:00:00-05:00`; 
         const horaFin8AM = `${cita.seguimiento}T08:00:00-05:00`;
 
+        const datosParaZapier = {
+          ...cita,
+          zapierTitulo: tituloParaCalendario,
+          zapierInicio: horaInicio7AM,
+          zapierFin: horaFin8AM
+        };
+
+        // MODO A PRUEBA DE BALAS: Enviar sin headers estrictos (evita el bloqueo CORS)
+        await fetch(LINK_WEBHOOK_ZAPIER, { 
+          method: 'POST', 
+          body: JSON.stringify(datosParaZapier)
+        });
+        
+        mostrarNotificacion(`✅ Zapier completó la tarea. Copia enviada al calendario.`);
+      } else {
+        mostrarNotificacion("⚠️ Falta pegar el link de Zapier en la línea 31.");
+      }
+    } catch (e) { 
+      console.error("Error al conectar Zapier:", e); 
+      mostrarNotificacion("❌ Error: El navegador bloqueó el envío o el link está mal.");
+    }
+  };
         const datosParaZapier = {
           ...cita,
           zapierTitulo: tituloParaCalendario,
