@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  UploadCloud, Calendar, User, Search, CheckCircle, 
-  Clock, AlertCircle, Zap, Activity, Users, LogOut,
-  Settings, UserPlus, Trash2, CheckSquare, Bell, Download, PlusCircle
+  UploadCloud, Calendar, Search, 
+  AlertCircle, Zap, Activity, Settings, Trash2, Bell, Download, PlusCircle, X, ChevronRight, CheckCircle, Clock
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -59,11 +58,13 @@ export default function CRMCapillas() {
   const [asesoresActivos, setAsesoresActivos] = useState(ASESORES_INICIALES);
   const [nuevoAsesor, setNuevoAsesor] = useState("");
   const [terminoBusqueda, setTerminoBusqueda] = useState("");
+  
+  // NUEVO: Estado para la ventana emergente (Modal)
+  const [citaSeleccionada, setCitaSeleccionada] = useState(null);
 
-  // Estado para el formulario manual
-  const [formManual, setFormManual] = useState({ cliente: '', asesor: ASESORES_INICIALES[0], notas: '' });
+  // NUEVO: El formulario manual ahora incluye la fecha programada
+  const [formManual, setFormManual] = useState({ cliente: '', asesor: ASESORES_INICIALES[0], notas: '', fechaVisita: getHoy() });
 
-  // Conexión a Base de Datos
   useEffect(() => {
     signInAnonymously(auth).catch(console.error);
     const unsubscribe = onAuthStateChanged(auth, setUser);
@@ -79,7 +80,7 @@ export default function CRMCapillas() {
       setCitas(datosCitas);
       setCargando(false);
     }, (error) => {
-      console.error("Error al conectar Firebase. ¿Pusiste las llaves?", error);
+      console.error("Error Firebase", error);
       setCargando(false);
     });
     return () => unsubscribe();
@@ -93,17 +94,22 @@ export default function CRMCapillas() {
     if (!esJefa) filtradas = filtradas.filter(c => c.asesor === usuarioActual);
     if (terminoBusqueda) {
       const b = terminoBusqueda.toLowerCase();
-      filtradas = filtradas.filter(c => c.cliente.toLowerCase().includes(b) || c.fechaCita.includes(b) || (c.seguimiento && c.seguimiento.includes(b)));
+      filtradas = filtradas.filter(c => c.cliente.toLowerCase().includes(b) || (c.fechaVisita && c.fechaVisita.includes(b)));
     }
     return filtradas;
   }, [citas, usuarioActual, esJefa, terminoBusqueda]);
 
+  // ALARMAS MEJORADAS
   const alarmas = useMemo(() => {
     const hoy = getHoy();
-    const seguimientosUrgentes = citasFiltradas.filter(c => c.seguimiento && c.seguimiento <= hoy && !['cierre', 'no_cierre'].includes(c.estado));
+    const seguimientosUrgentes = citasFiltradas.filter(c => 
+      ((c.fechaVisita && c.fechaVisita <= hoy && c.estado === 'asignada') || 
+      (c.seguimiento && c.seguimiento <= hoy)) && 
+      !['cierre', 'no_cierre'].includes(c.estado)
+    );
     const peligroGps = citasFiltradas.filter(c => {
       if (['cierre', 'no_cierre'].includes(c.estado)) return false;
-      return new Date(c.ultimaModificacion || c.fechaCita) <= new Date(restarDias(hoy, 25));
+      return new Date(c.ultimaModificacion || c.fechaAsignacion) <= new Date(restarDias(hoy, 25));
     });
     return { seguimientosUrgentes, peligroGps };
   }, [citasFiltradas]);
@@ -121,9 +127,9 @@ export default function CRMCapillas() {
   };
 
   const exportarAExcel = () => {
-    const encabezados = ['Empresa', 'Asesor', 'Estado Actual', 'Fecha de Carga', 'Fecha Siguiente Seguimiento', 'Notas / Avances', 'Última Edición'];
+    const encabezados = ['Empresa', 'Asesor', 'Estado Actual', 'Fecha Asignacion', 'Fecha Programada Visita', 'Fecha Siguiente Seguimiento', 'Notas / Avances'];
     const filas = citasFiltradas.map(c => [
-      `"${c.cliente}"`, `"${c.asesor}"`, `"${ESTADOS.find(e => e.id === c.estado)?.label || c.estado}"`, `"${c.fechaCita}"`, `"${c.seguimiento}"`, `"${(c.notas || '').replace(/"/g, '""')}"`, `"${c.ultimaModificacion}"`
+      `"${c.cliente}"`, `"${c.asesor}"`, `"${ESTADOS.find(e => e.id === c.estado)?.label || c.estado}"`, `"${c.fechaAsignacion}"`, `"${c.fechaVisita}"`, `"${c.seguimiento}"`, `"${(c.notas || '').replace(/"/g, '""')}"`
     ]);
     const csvContent = [encabezados.join(','), ...filas.map(f => f.join(','))].join('\n');
     const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' }); 
@@ -134,7 +140,7 @@ export default function CRMCapillas() {
     mostrarNotificacion("📊 Reporte descargado exitosamente.");
   };
 
-  // 1. CARGA MANUAL DE CLIENTE
+  // GUARDAR CITA MANUAL (Ahora con fecha programada)
   const guardarCitaManual = async (e) => {
     e.preventDefault();
     if (!formManual.cliente.trim() || !formManual.asesor) return;
@@ -144,7 +150,8 @@ export default function CRMCapillas() {
       cliente: formManual.cliente.trim(),
       asesor: formManual.asesor,
       estado: 'asignada',
-      fechaCita: getHoy(),
+      fechaAsignacion: getHoy(),
+      fechaVisita: formManual.fechaVisita, // La fecha que elegiste para el futuro
       seguimiento: '',
       notas: formManual.notas.trim(),
       ultimaModificacion: getHoy(),
@@ -153,17 +160,15 @@ export default function CRMCapillas() {
     
     try {
       await addDoc(collection(db, 'citas_comerciales'), nuevaCita);
-      mostrarNotificacion(`✅ Empresa ${nuevaCita.cliente} asignada a ${nuevaCita.asesor}.`);
-      setFormManual({ cliente: '', asesor: asesoresActivos[0], notas: '' }); // Limpiar formulario
+      mostrarNotificacion(`✅ Empresa ${nuevaCita.cliente} agendada para el ${nuevaCita.fechaVisita}.`);
+      setFormManual({ cliente: '', asesor: asesoresActivos[0], notas: '', fechaVisita: getHoy() }); 
     } catch (e) { console.error(e); alert("Error al guardar."); }
   };
 
-  // 2. CARGA MASIVA (EXCEL CSV)
   const procesarArchivoCSV = (e) => {
     e.preventDefault();
     const archivo = document.getElementById('fileUpload').files[0];
     if (!archivo) return alert("Selecciona un archivo primero.");
-    
     mostrarNotificacion("⏳ Leyendo archivo y asignando a asesores...", 3000);
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -175,7 +180,7 @@ export default function CRMCapillas() {
         const columnas = lineas[i].split(','); 
         if (columnas.length >= 2) {
           const nuevaCita = {
-            cliente: columnas[0].trim(), asesor: columnas[1].trim(), estado: 'asignada', fechaCita: getHoy(), seguimiento: '', notas: '', ultimaModificacion: getHoy(), createdAt: Date.now() + i
+            cliente: columnas[0].trim(), asesor: columnas[1].trim(), estado: 'asignada', fechaAsignacion: getHoy(), fechaVisita: getHoy(), seguimiento: '', notas: '', ultimaModificacion: getHoy(), createdAt: Date.now() + i
           };
           try { await addDoc(collection(db, 'citas_comerciales'), nuevaCita); cargadas++; } catch (e) { console.error(e); }
         }
@@ -197,21 +202,40 @@ export default function CRMCapillas() {
     } catch (e) { alert("Error al guardar."); }
   };
 
-  const eliminarCita = async (id) => { if(window.confirm("¿Eliminar registro para siempre?")) await deleteDoc(doc(db, 'citas_comerciales', id)); };
+  const eliminarCita = async (id) => { 
+    if(window.confirm("¿Eliminar registro para siempre?")) {
+      await deleteDoc(doc(db, 'citas_comerciales', id)); 
+      setCitaSeleccionada(null); // Cerrar ventana si estaba abierta
+    }
+  };
+  
   const agregarAsesor = (e) => { e.preventDefault(); if (nuevoAsesor.trim() && !asesoresActivos.includes(nuevoAsesor)) { setAsesoresActivos([...asesoresActivos, nuevoAsesor.trim()]); setNuevoAsesor(""); mostrarNotificacion("✅ Asesor agregado."); } };
   const eliminarAsesor = (nombre) => { if (window.confirm(`¿Desactivar a ${nombre}?`)) setAsesoresActivos(asesoresActivos.filter(a => a !== nombre)); };
 
+  // IDENTIFICAR ESTADO VISUAL DE LA CITA (Para las etiquetas de colores)
+  const obtenerEtiquetaVisual = (cita) => {
+    if (['cierre', 'no_cierre'].includes(cita.estado)) return { text: 'Finalizada', color: 'bg-gray-100 text-gray-500 border-gray-200' };
+    const hoy = getHoy();
+    const fechaClave = cita.seguimiento || cita.fechaVisita;
+    if (!fechaClave) return { text: 'Sin Fecha', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (fechaClave < hoy) return { text: '¡Vencida!', color: 'bg-red-50 text-red-700 border-red-200 animate-pulse' };
+    if (fechaClave === hoy) return { text: 'Para Hoy', color: 'bg-yellow-50 text-yellow-700 border-yellow-300' };
+    return { text: 'A tiempo', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+  };
+
   if (cargando) return <div className="min-h-screen flex items-center justify-center font-bold text-blue-800">Cargando Motor CRM Capillas de la Fe...</div>;
 
+  const citaActiva = citas.find(c => c.id === citaSeleccionada);
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-800 pb-10">
+    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 pb-10">
       
       {/* BARRA DE ACCESO (SIMULADOR) */}
       <div className="bg-slate-900 text-white p-2 flex justify-between items-center text-sm px-6">
         <span className="font-medium text-slate-400">Panel de Control Interno</span>
         <div className="flex items-center gap-2">
           <span>Ver como:</span>
-          <select className="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-white font-bold outline-none" value={usuarioActual} onChange={(e) => { setUsuarioActual(e.target.value); setVistaActual('dashboard'); }}>
+          <select className="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-white font-bold outline-none" value={usuarioActual} onChange={(e) => { setUsuarioActual(e.target.value); setVistaActual('dashboard'); setCitaSeleccionada(null); }}>
             {usuariosDisponibles.map(u => <option key={u} value={u}>{u}</option>)}
           </select>
         </div>
@@ -225,7 +249,7 @@ export default function CRMCapillas() {
             <h1 className="text-xl font-bold">CAPILLAS DE LA FE <span className="font-light text-blue-300">| Hub Comercial</span></h1>
           </div>
           <div className="relative w-full md:w-96">
-            <input type="text" placeholder="Buscar por cliente o fecha..." className="w-full bg-blue-900 border border-blue-700 rounded-full py-2 pl-10 pr-4 text-white placeholder-blue-300 outline-none" value={terminoBusqueda} onChange={(e) => setTerminoBusqueda(e.target.value)} />
+            <input type="text" placeholder="Buscar empresa..." className="w-full bg-blue-900 border border-blue-700 rounded-full py-2 pl-10 pr-4 text-white placeholder-blue-300 outline-none" value={terminoBusqueda} onChange={(e) => setTerminoBusqueda(e.target.value)} />
             <Search className="absolute left-3 top-2.5 text-blue-300" size={18} />
           </div>
           <div className="hidden md:flex items-center gap-3">
@@ -246,21 +270,21 @@ export default function CRMCapillas() {
         
         {/* MENÚ LATERAL */}
         <aside className="w-full md:w-64 flex flex-col gap-2 shrink-0">
-          <button onClick={() => setVistaActual('dashboard')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'dashboard' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100'}`}><Activity size={20}/> Monitor de Gestiones</button>
+          <button onClick={() => setVistaActual('dashboard')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'dashboard' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><Activity size={20}/> Monitor de Gestiones</button>
           
           {esJefa && (
             <>
-              <button onClick={() => setVistaActual('cargar')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'cargar' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100'}`}><UploadCloud size={20}/> Asignar Citas</button>
-              <button onClick={() => setVistaActual('config')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'config' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100'}`}><Settings size={20}/> Equipo y Asesores</button>
+              <button onClick={() => setVistaActual('cargar')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'cargar' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><UploadCloud size={20}/> Asignar Citas</button>
+              <button onClick={() => setVistaActual('config')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'config' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><Settings size={20}/> Equipo y Asesores</button>
             </>
           )}
 
-          <div className="mt-4 p-4 bg-slate-800 rounded-xl text-xs text-slate-300">
-            <p className="font-bold mb-2 flex items-center gap-1 text-white"><Zap size={16} className="text-yellow-400"/> Sistema Zapier</p>
-            <ul className="space-y-1">
-              <li>✅ Envía copias a Jefatura</li>
-              <li>✅ Sincroniza G. Calendar</li>
-              <li>✅ Alerta de 25 días (GPS)</li>
+          <div className="mt-4 p-4 bg-slate-800 rounded-xl text-xs text-slate-300 shadow-lg">
+            <p className="font-bold mb-2 flex items-center gap-1 text-white"><Zap size={16} className="text-yellow-400"/> Sistema Inteligente</p>
+            <ul className="space-y-2">
+              <li className="flex items-center gap-2"><CheckCircle size={12} className="text-emerald-400"/> Etiquetas de atrasos</li>
+              <li className="flex items-center gap-2"><CheckCircle size={12} className="text-emerald-400"/> Sincroniza Calendar</li>
+              <li className="flex items-center gap-2"><CheckCircle size={12} className="text-emerald-400"/> Alerta 25 días (GPS)</li>
             </ul>
           </div>
         </aside>
@@ -270,17 +294,17 @@ export default function CRMCapillas() {
           
           {/* VISTA: CONFIGURAR EQUIPO */}
           {vistaActual === 'config' && esJefa && (
-            <div className="bg-white rounded-2xl p-8 shadow border">
+            <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200">
               <h2 className="text-2xl font-bold border-b pb-4 mb-6">Gestión de Asesores</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <form onSubmit={agregarAsesor} className="bg-slate-50 p-6 rounded-xl border">
+                <form onSubmit={agregarAsesor} className="bg-slate-50 p-6 rounded-xl border border-slate-200">
                   <h3 className="font-bold mb-4">Agregar Nuevo Asesor</h3>
                   <input type="text" required placeholder="Nombre completo" className="w-full p-3 border rounded-lg mb-3" value={nuevoAsesor} onChange={e => setNuevoAsesor(e.target.value)} />
                   <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700">Guardar Asesor</button>
                 </form>
                 <div>
                   <h3 className="font-bold mb-4">Asesores Activos ({asesoresActivos.length})</h3>
-                  <ul className="border rounded-xl divide-y max-h-64 overflow-y-auto">
+                  <ul className="border rounded-xl divide-y max-h-64 overflow-y-auto bg-white">
                     {asesoresActivos.map(a => (
                       <li key={a} className="p-3 flex justify-between items-center hover:bg-slate-50">
                         <span className="font-medium">{a}</span>
@@ -293,32 +317,38 @@ export default function CRMCapillas() {
             </div>
           )}
 
-          {/* VISTA: CARGAR / ASIGNAR CITAS (ACTUALIZADA CON DOS OPCIONES) */}
+          {/* VISTA: CARGAR / ASIGNAR CITAS */}
           {vistaActual === 'cargar' && esJefa && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
-              {/* OPCIÓN 1: MANUAL */}
-              <div className="bg-white rounded-2xl p-8 shadow border border-slate-200 relative overflow-hidden">
+              {/* OPCIÓN 1: MANUAL (AHORA CON FECHA) */}
+              <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 relative overflow-hidden">
                 <div className="absolute top-0 right-0 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">UNO A UNO</div>
-                <h2 className="text-2xl font-bold mb-2 flex items-center gap-2 text-slate-800"><PlusCircle className="text-blue-600"/> Registro Manual</h2>
-                <p className="text-slate-500 text-sm mb-6">Ingresa una nueva empresa y asígnala directamente a un asesor.</p>
+                <h2 className="text-2xl font-bold mb-2 flex items-center gap-2 text-slate-800"><PlusCircle className="text-blue-600"/> Agendar Visita</h2>
+                <p className="text-slate-500 text-sm mb-6">Asigna una empresa y la fecha exacta en la que el asesor debe ir.</p>
                 
                 <form onSubmit={guardarCitaManual} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Nombre de la Empresa / Cliente</label>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Empresa / Cliente</label>
                     <input type="text" required placeholder="Ej. Constructora Andina" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" value={formManual.cliente} onChange={e => setFormManual({...formManual, cliente: e.target.value})} />
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Asignar a Asesor</label>
-                    <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700 bg-slate-50" value={formManual.asesor} onChange={e => setFormManual({...formManual, asesor: e.target.value})}>
-                      {asesoresActivos.map(a => <option key={a} value={a}>{a}</option>)}
-                    </select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Asesor</label>
+                      <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700 bg-slate-50" value={formManual.asesor} onChange={e => setFormManual({...formManual, asesor: e.target.value})}>
+                        {asesoresActivos.map(a => <option key={a} value={a}>{a}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Fecha de Visita</label>
+                      <input type="date" required className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 font-bold text-blue-700 bg-blue-50" value={formManual.fechaVisita} onChange={e => setFormManual({...formManual, fechaVisita: e.target.value})} />
+                    </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Notas iniciales (Opcional)</label>
-                    <textarea rows="2" placeholder="Ej. Tienen interés en los planes corporativos..." className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" value={formManual.notas} onChange={e => setFormManual({...formManual, notas: e.target.value})}></textarea>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Notas (Opcional)</label>
+                    <textarea rows="2" placeholder="Ej. Preguntar por el Gerente..." className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" value={formManual.notas} onChange={e => setFormManual({...formManual, notas: e.target.value})}></textarea>
                   </div>
-                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold transition-colors">Guardar y Asignar</button>
+                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold transition-colors shadow-md shadow-blue-200">Agendar Cita</button>
                 </form>
               </div>
 
@@ -326,8 +356,8 @@ export default function CRMCapillas() {
               <div className="bg-slate-50 rounded-2xl p-8 shadow-inner border border-slate-200 text-center flex flex-col justify-center relative overflow-hidden">
                  <div className="absolute top-0 right-0 bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">MASIVO</div>
                 <UploadCloud size={50} className="mx-auto text-emerald-600 mb-4" />
-                <h2 className="text-2xl font-bold mb-2 text-slate-800">Cargar Excel (CSV)</h2>
-                <p className="text-slate-500 mb-6 text-sm">Ideal para la carga del día. Sube un archivo con 2 columnas: "Empresa" y "Asesor".</p>
+                <h2 className="text-2xl font-bold mb-2 text-slate-800">Carga Rápida (CSV)</h2>
+                <p className="text-slate-500 mb-6 text-sm">Ideal para inicio de mes. Sube un archivo con "Empresa" y "Asesor". La visita quedará agendada para hoy por defecto.</p>
                 <form onSubmit={procesarArchivoCSV} className="max-w-md mx-auto p-6 bg-white border-2 border-dashed border-emerald-300 rounded-xl w-full">
                   <input type="file" id="fileUpload" accept=".csv" required className="w-full mb-4 text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer" />
                   <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-3 rounded-xl font-bold shadow-md shadow-emerald-200">Subir Citas</button>
@@ -337,47 +367,33 @@ export default function CRMCapillas() {
             </div>
           )}
 
-          {/* VISTA: MONITOR PRINCIPAL */}
+          {/* VISTA: MONITOR PRINCIPAL CON LISTA LIMPIA */}
           {vistaActual === 'dashboard' && (
             <div className="space-y-6">
               
-              {/* ALARMAS DE 25 DÍAS Y SEGUIMIENTO */}
+              {/* ALARMAS SUPERIORES */}
               {(alarmas.seguimientosUrgentes.length > 0 || (esJefa && alarmas.peligroGps.length > 0)) && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {alarmas.seguimientosUrgentes.length > 0 && (
-                    <div className="bg-orange-50 border-2 border-orange-300 rounded-xl p-5 shadow-sm">
-                      <h3 className="text-orange-800 font-bold flex items-center gap-2 mb-3"><Bell className="animate-bounce"/> Visitas para Hoy</h3>
-                      <ul className="space-y-2 max-h-32 overflow-y-auto">
-                        {alarmas.seguimientosUrgentes.map(c => (
-                          <li key={c.id} className="text-sm bg-white p-2 rounded border border-orange-200 flex justify-between">
-                            <span className="font-bold">{c.cliente} <span className="font-normal text-slate-500">({esJefa ? c.asesor : c.estado})</span></span>
-                            <span className="text-orange-600 font-bold">{c.seguimiento}</span>
-                          </li>
-                        ))}
-                      </ul>
+                    <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 shadow-sm">
+                      <h3 className="text-orange-800 font-bold flex items-center gap-2 mb-2"><Bell size={18} className="animate-bounce"/> Visitas Vencidas o Para Hoy</h3>
+                      <p className="text-xs text-orange-600 mb-2">Tienen visitas programadas o seguimientos que requieren atención inmediata.</p>
                     </div>
                   )}
                   {alarmas.peligroGps.length > 0 && esJefa && (
-                    <div className="bg-red-50 border-2 border-red-300 rounded-xl p-5 shadow-sm">
-                      <h3 className="text-red-800 font-bold flex items-center gap-2 mb-3"><AlertCircle /> Alerta 25 Días (Riesgo GPS)</h3>
-                      <ul className="space-y-2 max-h-32 overflow-y-auto">
-                        {alarmas.peligroGps.map(c => (
-                          <li key={c.id} className="text-sm bg-white p-2 rounded border border-red-200 flex justify-between">
-                            <span className="font-bold">{c.cliente}</span>
-                            <span className="text-xs bg-red-100 text-red-800 px-2 py-1 rounded font-bold">Asesor: {c.asesor}</span>
-                          </li>
-                        ))}
-                      </ul>
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm">
+                      <h3 className="text-red-800 font-bold flex items-center gap-2 mb-2"><AlertCircle size={18}/> Alerta 25 Días (Riesgo GPS)</h3>
+                      <p className="text-xs text-red-600 mb-2">Empresas sin movimiento reciente que podrían perderse en el GPS general.</p>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* ENCABEZADO LISTA DE EMPRESAS Y BOTÓN EXCEL */}
+              {/* ENCABEZADO Y BOTÓN EXCEL */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-2 gap-4">
                 <div>
-                  <h2 className="text-2xl font-bold text-slate-800">{esJefa ? 'Todas las Gestiones' : 'Mis Empresas'}</h2>
-                  <span className="bg-slate-200 px-3 py-1 rounded-full text-sm font-bold mt-1 inline-block">{citasFiltradas.length} Registros</span>
+                  <h2 className="text-2xl font-bold text-slate-800">{esJefa ? 'Todas las Gestiones' : 'Mis Empresas Asignadas'}</h2>
+                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-bold mt-1 inline-block">{citasFiltradas.length} Registros</span>
                 </div>
                 {esJefa && (
                   <button onClick={exportarAExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-sm">
@@ -387,38 +403,41 @@ export default function CRMCapillas() {
               </div>
 
               {citasFiltradas.length === 0 ? (
-                <div className="bg-white rounded-xl border p-12 text-center text-slate-500"><Search className="mx-auto mb-4 opacity-50" size={40}/> No hay citas para mostrar.</div>
+                <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-16 text-center text-slate-500">
+                  <Activity className="mx-auto mb-4 opacity-30" size={60}/> 
+                  <h3 className="text-xl font-bold text-slate-700 mb-1">Tu lista está limpia</h3>
+                  <p>No hay empresas pendientes por mostrar en este momento.</p>
+                </div>
               ) : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {citasFiltradas.map(cita => (
-                    <div key={cita.id} className={`bg-white border rounded-xl shadow-sm p-4 ${['cierre'].includes(cita.estado) ? 'border-green-400 bg-green-50' : ''}`}>
-                      <div className="flex justify-between items-start mb-4 border-b pb-3">
-                        <div>
-                          <h3 className="font-bold text-lg">{cita.cliente}</h3>
-                          <p className="text-xs text-slate-500 mt-1">Creación: {cita.fechaCita}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {citasFiltradas.map(cita => {
+                    const etiqueta = obtenerEtiquetaVisual(cita);
+                    return (
+                      <div key={cita.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-shadow flex flex-col overflow-hidden">
+                        {/* Cabecera de la Tarjeta Pequeña */}
+                        <div className="p-5 flex-grow">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded border ${etiqueta.color}`}>
+                              {etiqueta.text}
+                            </span>
+                            {esJefa && <span className="text-xs font-bold text-slate-400"><User size={12} className="inline mr-1"/>{cita.asesor}</span>}
+                          </div>
+                          <h3 className="font-bold text-lg text-slate-800 mb-1 truncate" title={cita.cliente}>{cita.cliente}</h3>
+                          <div className="text-xs text-slate-500 space-y-1">
+                            <p><Clock size={12} className="inline mr-1"/> Agendada para: <strong className="text-slate-700">{cita.fechaVisita}</strong></p>
+                            <p>Estado: {ESTADOS.find(e => e.id === cita.estado)?.label}</p>
+                          </div>
                         </div>
-                        {esJefa && <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-xs font-bold">{cita.asesor}</span>}
+                        {/* Botón para abrir la ventana */}
+                        <button 
+                          onClick={() => setCitaSeleccionada(cita.id)}
+                          className="w-full bg-slate-50 hover:bg-blue-50 text-blue-700 font-bold py-3 text-sm border-t border-slate-100 transition-colors flex justify-center items-center gap-1"
+                        >
+                          Gestionar Visita <ChevronRight size={16}/>
+                        </button>
                       </div>
-                      
-                      <div className="grid grid-cols-2 gap-4 mb-4">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-500 mb-1">Resultado de Visita</label>
-                          <select className="w-full p-2 border rounded-lg font-bold text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500" value={cita.estado} onChange={(e) => actualizarGestion(cita.id, 'estado', e.target.value)}>
-                            {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold text-blue-700 mb-1 flex items-center gap-1"><Zap size={10}/> Agendar Calendar</label>
-                          <input type="date" className="w-full p-2 border border-blue-200 rounded-lg text-sm bg-white outline-none focus:ring-2 focus:ring-blue-500 font-bold text-blue-800" value={cita.seguimiento} onChange={(e) => actualizarGestion(cita.id, 'seguimiento', e.target.value)} disabled={['cierre', 'no_cierre'].includes(cita.estado)} />
-                        </div>
-                      </div>
-                      
-                      <textarea className="w-full p-3 border rounded-lg text-sm bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-blue-500" rows="2" placeholder="Escribe los avances de la negociación..." value={cita.notas} onChange={(e) => actualizarGestion(cita.id, 'notas', e.target.value)}></textarea>
-                      <p className="text-[10px] text-slate-400 mt-1 text-right">Última edición: {cita.ultimaModificacion}</p>
-                      
-                      {esJefa && <button onClick={() => eliminarCita(cita.id)} className="text-red-500 text-xs font-bold mt-2 hover:underline"><Trash2 size={12} className="inline mr-1"/>Borrar Empresa</button>}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -426,6 +445,88 @@ export default function CRMCapillas() {
 
         </main>
       </div>
+
+      {/* =========================================================
+          VENTANA EMERGENTE (MODAL) PARA ALIMENTAR LA CITA 
+          ========================================================= */}
+      {citaActiva && (
+        <div className="fixed inset-0 bg-slate-900 bg-opacity-50 flex items-center justify-center p-4 z-50 animate-fade-in backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
+            
+            {/* Cabecera de la Ventana */}
+            <div className="p-6 border-b border-slate-100 flex justify-between items-start bg-blue-800 text-white rounded-t-3xl">
+              <div>
+                <span className="bg-blue-700 text-blue-100 text-[10px] uppercase font-bold px-2 py-1 rounded">Expediente Comercial</span>
+                <h2 className="text-2xl font-bold mt-2 leading-tight">{citaActiva.cliente}</h2>
+                <p className="text-sm text-blue-200 mt-1">Asesor: {citaActiva.asesor}</p>
+              </div>
+              <button onClick={() => setCitaSeleccionada(null)} className="text-blue-200 hover:text-white bg-blue-900 rounded-full p-2 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Contenido (El Formulario) */}
+            <div className="p-6 overflow-y-auto space-y-5">
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Resultado de Visita</label>
+                  <select 
+                    className="w-full p-3 border border-slate-200 rounded-xl font-bold text-sm bg-slate-50 outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all" 
+                    value={citaActiva.estado} 
+                    onChange={(e) => actualizarGestion(citaActiva.id, 'estado', e.target.value)}
+                  >
+                    {ESTADOS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-blue-600 mb-1 uppercase flex items-center gap-1"><Zap size={12}/> Próximo Contacto</label>
+                  <input 
+                    type="date" 
+                    className="w-full p-3 border border-blue-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold text-blue-800 bg-blue-50 transition-all" 
+                    value={citaActiva.seguimiento} 
+                    onChange={(e) => actualizarGestion(citaActiva.id, 'seguimiento', e.target.value)} 
+                    disabled={['cierre', 'no_cierre'].includes(citaActiva.estado)} 
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 leading-tight">Agendar esto envía aviso automático a Zapier.</p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Bitácora / Avances de la negociación</label>
+                <textarea 
+                  className="w-full p-4 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white outline-none focus:ring-2 focus:ring-blue-500 transition-all" 
+                  rows="4" 
+                  placeholder="¿Qué conversaron? ¿Qué falta para el cierre?" 
+                  value={citaActiva.notas} 
+                  onChange={(e) => actualizarGestion(citaActiva.id, 'notas', e.target.value)}
+                ></textarea>
+              </div>
+
+              {esJefa && (
+                <div className="pt-4 border-t border-slate-100 flex justify-end">
+                   <button onClick={() => eliminarCita(citaActiva.id)} className="text-red-500 text-sm font-bold flex items-center gap-1 hover:text-red-700 bg-red-50 px-3 py-2 rounded-lg">
+                     <Trash2 size={16}/> Borrar Empresa
+                   </button>
+                </div>
+              )}
+            </div>
+
+            {/* Pie de la Ventana */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-3xl flex justify-between items-center">
+              <span className="text-[10px] text-slate-400 flex items-center gap-1"><CheckCircle size={12}/> Guardado automático en Firebase</span>
+              <button 
+                onClick={() => setCitaSeleccionada(null)} 
+                className="bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 px-8 rounded-xl transition-transform transform hover:scale-105 shadow-lg"
+              >
+                Cerrar Panel
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
