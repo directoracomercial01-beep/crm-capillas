@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   UploadCloud, Calendar, Search, 
-  AlertCircle, Zap, Activity, Settings, Trash2, Bell, Download, PlusCircle, X, ChevronRight, CheckCircle, Clock
+  AlertCircle, Zap, Activity, Settings, Trash2, Bell, Download, PlusCircle, X, ChevronRight, CheckCircle, Clock, Mail, CheckSquare, User
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -26,7 +26,7 @@ const db = getFirestore(app);
 // =====================================================================
 // ⚠️ CABLE 2: AQUÍ VA EL LINK DE ZAPIER (Para el Google Calendar)
 // =====================================================================
-const LINK_WEBHOOK_ZAPIER = "PIDELE_A_ZAPIER_ESTE_LINK_Y_PEGALO_AQUI";
+const LINK_WEBHOOK_ZAPIER = "https://hooks.zapier.com/hooks/catch/26692144/u076pbw/";
 
 // ==========================================
 // DATOS DE CAPILLAS DE LA FE
@@ -59,10 +59,7 @@ export default function CRMCapillas() {
   const [nuevoAsesor, setNuevoAsesor] = useState("");
   const [terminoBusqueda, setTerminoBusqueda] = useState("");
   
-  // NUEVO: Estado para la ventana emergente (Modal)
   const [citaSeleccionada, setCitaSeleccionada] = useState(null);
-
-  // NUEVO: El formulario manual ahora incluye la fecha programada
   const [formManual, setFormManual] = useState({ cliente: '', asesor: ASESORES_INICIALES[0], notas: '', fechaVisita: getHoy() });
 
   useEffect(() => {
@@ -109,7 +106,8 @@ export default function CRMCapillas() {
     );
     const peligroGps = citasFiltradas.filter(c => {
       if (['cierre', 'no_cierre'].includes(c.estado)) return false;
-      return new Date(c.ultimaModificacion || c.fechaAsignacion) <= new Date(restarDias(hoy, 25));
+      // Calcula 25 días exactos desde la fecha de asignación original
+      return new Date(c.fechaAsignacion) <= new Date(restarDias(hoy, 25));
     });
     return { seguimientosUrgentes, peligroGps };
   }, [citasFiltradas]);
@@ -127,9 +125,9 @@ export default function CRMCapillas() {
   };
 
   const exportarAExcel = () => {
-    const encabezados = ['Empresa', 'Asesor', 'Estado Actual', 'Fecha Asignacion', 'Fecha Programada Visita', 'Fecha Siguiente Seguimiento', 'Notas / Avances'];
+    const encabezados = ['Empresa', 'Asesor', 'Estado Actual', 'Fecha Asignacion', 'Fecha Programada Visita', 'Fecha Siguiente Seguimiento', 'Notas / Avances', 'Propuesta Enviada', 'Correo de Propuesta'];
     const filas = citasFiltradas.map(c => [
-      `"${c.cliente}"`, `"${c.asesor}"`, `"${ESTADOS.find(e => e.id === c.estado)?.label || c.estado}"`, `"${c.fechaAsignacion}"`, `"${c.fechaVisita}"`, `"${c.seguimiento}"`, `"${(c.notas || '').replace(/"/g, '""')}"`
+      `"${c.cliente}"`, `"${c.asesor}"`, `"${ESTADOS.find(e => e.id === c.estado)?.label || c.estado}"`, `"${c.fechaAsignacion}"`, `"${c.fechaVisita}"`, `"${c.seguimiento}"`, `"${(c.notas || '').replace(/"/g, '""')}"`, `"${c.propuestaEnviada ? 'SI' : 'NO'}"`, `"${c.correoPropuesta || ''}"`
     ]);
     const csvContent = [encabezados.join(','), ...filas.map(f => f.join(','))].join('\n');
     const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' }); 
@@ -140,7 +138,6 @@ export default function CRMCapillas() {
     mostrarNotificacion("📊 Reporte descargado exitosamente.");
   };
 
-  // GUARDAR CITA MANUAL (Ahora con fecha programada)
   const guardarCitaManual = async (e) => {
     e.preventDefault();
     if (!formManual.cliente.trim() || !formManual.asesor) return;
@@ -151,9 +148,11 @@ export default function CRMCapillas() {
       asesor: formManual.asesor,
       estado: 'asignada',
       fechaAsignacion: getHoy(),
-      fechaVisita: formManual.fechaVisita, // La fecha que elegiste para el futuro
+      fechaVisita: formManual.fechaVisita, 
       seguimiento: '',
       notas: formManual.notas.trim(),
+      propuestaEnviada: false,
+      correoPropuesta: '',
       ultimaModificacion: getHoy(),
       createdAt: Date.now()
     };
@@ -180,7 +179,7 @@ export default function CRMCapillas() {
         const columnas = lineas[i].split(','); 
         if (columnas.length >= 2) {
           const nuevaCita = {
-            cliente: columnas[0].trim(), asesor: columnas[1].trim(), estado: 'asignada', fechaAsignacion: getHoy(), fechaVisita: getHoy(), seguimiento: '', notas: '', ultimaModificacion: getHoy(), createdAt: Date.now() + i
+            cliente: columnas[0].trim(), asesor: columnas[1].trim(), estado: 'asignada', fechaAsignacion: getHoy(), fechaVisita: getHoy(), seguimiento: '', notas: '', propuestaEnviada: false, correoPropuesta: '', ultimaModificacion: getHoy(), createdAt: Date.now() + i
           };
           try { await addDoc(collection(db, 'citas_comerciales'), nuevaCita); cargadas++; } catch (e) { console.error(e); }
         }
@@ -205,14 +204,13 @@ export default function CRMCapillas() {
   const eliminarCita = async (id) => { 
     if(window.confirm("¿Eliminar registro para siempre?")) {
       await deleteDoc(doc(db, 'citas_comerciales', id)); 
-      setCitaSeleccionada(null); // Cerrar ventana si estaba abierta
+      setCitaSeleccionada(null); 
     }
   };
   
   const agregarAsesor = (e) => { e.preventDefault(); if (nuevoAsesor.trim() && !asesoresActivos.includes(nuevoAsesor)) { setAsesoresActivos([...asesoresActivos, nuevoAsesor.trim()]); setNuevoAsesor(""); mostrarNotificacion("✅ Asesor agregado."); } };
   const eliminarAsesor = (nombre) => { if (window.confirm(`¿Desactivar a ${nombre}?`)) setAsesoresActivos(asesoresActivos.filter(a => a !== nombre)); };
 
-  // IDENTIFICAR ESTADO VISUAL DE LA CITA (Para las etiquetas de colores)
   const obtenerEtiquetaVisual = (cita) => {
     if (['cierre', 'no_cierre'].includes(cita.estado)) return { text: 'Finalizada', color: 'bg-gray-100 text-gray-500 border-gray-200' };
     const hoy = getHoy();
@@ -230,7 +228,6 @@ export default function CRMCapillas() {
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800 pb-10">
       
-      {/* BARRA DE ACCESO (SIMULADOR) */}
       <div className="bg-slate-900 text-white p-2 flex justify-between items-center text-sm px-6">
         <span className="font-medium text-slate-400">Panel de Control Interno</span>
         <div className="flex items-center gap-2">
@@ -241,7 +238,6 @@ export default function CRMCapillas() {
         </div>
       </div>
 
-      {/* HEADER CAPILLAS */}
       <nav className="bg-blue-800 text-white p-4 shadow-md sticky top-0 z-20">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
@@ -258,17 +254,14 @@ export default function CRMCapillas() {
         </div>
       </nav>
 
-      {/* NOTIFICACIONES EMERGENTES */}
       {notificacion && (
         <div className="fixed top-24 left-1/2 transform -translate-x-1/2 bg-green-600 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 font-bold z-50 animate-bounce">
           {notificacion}
         </div>
       )}
 
-      {/* CUERPO PRINCIPAL */}
       <div className="flex flex-col md:flex-row max-w-7xl mx-auto w-full mt-6 gap-6 px-4">
         
-        {/* MENÚ LATERAL */}
         <aside className="w-full md:w-64 flex flex-col gap-2 shrink-0">
           <button onClick={() => setVistaActual('dashboard')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'dashboard' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><Activity size={20}/> Monitor de Gestiones</button>
           
@@ -289,10 +282,8 @@ export default function CRMCapillas() {
           </div>
         </aside>
 
-        {/* CONTENIDO DERECHO */}
         <main className="flex-1 min-w-0">
           
-          {/* VISTA: CONFIGURAR EQUIPO */}
           {vistaActual === 'config' && esJefa && (
             <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200">
               <h2 className="text-2xl font-bold border-b pb-4 mb-6">Gestión de Asesores</h2>
@@ -317,11 +308,9 @@ export default function CRMCapillas() {
             </div>
           )}
 
-          {/* VISTA: CARGAR / ASIGNAR CITAS */}
           {vistaActual === 'cargar' && esJefa && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
-              {/* OPCIÓN 1: MANUAL (AHORA CON FECHA) */}
               <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 relative overflow-hidden">
                 <div className="absolute top-0 right-0 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">UNO A UNO</div>
                 <h2 className="text-2xl font-bold mb-2 flex items-center gap-2 text-slate-800"><PlusCircle className="text-blue-600"/> Agendar Visita</h2>
@@ -352,7 +341,6 @@ export default function CRMCapillas() {
                 </form>
               </div>
 
-              {/* OPCIÓN 2: EXCEL MASIVO */}
               <div className="bg-slate-50 rounded-2xl p-8 shadow-inner border border-slate-200 text-center flex flex-col justify-center relative overflow-hidden">
                  <div className="absolute top-0 right-0 bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">MASIVO</div>
                 <UploadCloud size={50} className="mx-auto text-emerald-600 mb-4" />
@@ -367,11 +355,9 @@ export default function CRMCapillas() {
             </div>
           )}
 
-          {/* VISTA: MONITOR PRINCIPAL CON LISTA LIMPIA */}
           {vistaActual === 'dashboard' && (
             <div className="space-y-6">
               
-              {/* ALARMAS SUPERIORES */}
               {(alarmas.seguimientosUrgentes.length > 0 || (esJefa && alarmas.peligroGps.length > 0)) && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {alarmas.seguimientosUrgentes.length > 0 && (
@@ -389,7 +375,6 @@ export default function CRMCapillas() {
                 </div>
               )}
 
-              {/* ENCABEZADO Y BOTÓN EXCEL */}
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-2 gap-4">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-800">{esJefa ? 'Todas las Gestiones' : 'Mis Empresas Asignadas'}</h2>
@@ -414,7 +399,7 @@ export default function CRMCapillas() {
                     const etiqueta = obtenerEtiquetaVisual(cita);
                     return (
                       <div key={cita.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-shadow flex flex-col overflow-hidden">
-                        {/* Cabecera de la Tarjeta Pequeña */}
+                        
                         <div className="p-5 flex-grow">
                           <div className="flex justify-between items-start mb-2">
                             <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded border ${etiqueta.color}`}>
@@ -422,13 +407,28 @@ export default function CRMCapillas() {
                             </span>
                             {esJefa && <span className="text-xs font-bold text-slate-400"><User size={12} className="inline mr-1"/>{cita.asesor}</span>}
                           </div>
+
+                          {/* ALERTA DE 25 DÍAS EN LA TARJETA */}
+                          {new Date(cita.fechaAsignacion) <= new Date(restarDias(getHoy(), 25)) && !['cierre', 'no_cierre'].includes(cita.estado) && (
+                            <div className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded mb-2 flex items-center gap-1 w-max animate-pulse">
+                              <AlertCircle size={12}/> ¡GPS en Riesgo (+25 Días)!
+                            </div>
+                          )}
+
                           <h3 className="font-bold text-lg text-slate-800 mb-1 truncate" title={cita.cliente}>{cita.cliente}</h3>
                           <div className="text-xs text-slate-500 space-y-1">
                             <p><Clock size={12} className="inline mr-1"/> Agendada para: <strong className="text-slate-700">{cita.fechaVisita}</strong></p>
                             <p>Estado: {ESTADOS.find(e => e.id === cita.estado)?.label}</p>
+                            
+                            {/* BADGE DE PROPUESTA */}
+                            {cita.propuestaEnviada && (
+                              <p className="text-emerald-600 font-bold flex items-center gap-1 mt-1 bg-emerald-50 px-2 py-1 rounded w-max">
+                                <CheckSquare size={12}/> Propuesta Enviada
+                              </p>
+                            )}
                           </div>
                         </div>
-                        {/* Botón para abrir la ventana */}
+                        
                         <button 
                           onClick={() => setCitaSeleccionada(cita.id)}
                           className="w-full bg-slate-50 hover:bg-blue-50 text-blue-700 font-bold py-3 text-sm border-t border-slate-100 transition-colors flex justify-center items-center gap-1"
@@ -446,14 +446,10 @@ export default function CRMCapillas() {
         </main>
       </div>
 
-      {/* =========================================================
-          VENTANA EMERGENTE (MODAL) PARA ALIMENTAR LA CITA 
-          ========================================================= */}
       {citaActiva && (
         <div className="fixed inset-0 bg-slate-900 bg-opacity-50 flex items-center justify-center p-4 z-50 animate-fade-in backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]">
             
-            {/* Cabecera de la Ventana */}
             <div className="p-6 border-b border-slate-100 flex justify-between items-start bg-blue-800 text-white rounded-t-3xl">
               <div>
                 <span className="bg-blue-700 text-blue-100 text-[10px] uppercase font-bold px-2 py-1 rounded">Expediente Comercial</span>
@@ -465,7 +461,6 @@ export default function CRMCapillas() {
               </button>
             </div>
 
-            {/* Contenido (El Formulario) */}
             <div className="p-6 overflow-y-auto space-y-5">
               
               <div className="grid grid-cols-2 gap-4">
@@ -480,16 +475,45 @@ export default function CRMCapillas() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-blue-600 mb-1 uppercase flex items-center gap-1"><Zap size={12}/> Próximo Contacto</label>
+                  <label className="block text-xs font-bold text-blue-600 mb-1 uppercase flex items-center gap-1"><Calendar size={12}/> Reprogramar Visita</label>
                   <input 
                     type="date" 
                     className="w-full p-3 border border-blue-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500 font-bold text-blue-800 bg-blue-50 transition-all" 
-                    value={citaActiva.seguimiento} 
-                    onChange={(e) => actualizarGestion(citaActiva.id, 'seguimiento', e.target.value)} 
+                    value={citaActiva.fechaVisita} 
+                    onChange={(e) => {
+                      actualizarGestion(citaActiva.id, 'fechaVisita', e.target.value);
+                      actualizarGestion(citaActiva.id, 'seguimiento', e.target.value);
+                    }} 
                     disabled={['cierre', 'no_cierre'].includes(citaActiva.estado)} 
                   />
-                  <p className="text-[10px] text-slate-400 mt-1 leading-tight">Agendar esto envía aviso automático a Zapier.</p>
+                  <p className="text-[10px] text-slate-400 mt-1 leading-tight">Cambiar la fecha actualiza la tarjeta y avisa a Zapier.</p>
                 </div>
+              </div>
+
+              {/* SECCIÓN NUEVA: ENVÍO DE PROPUESTA */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer mb-3">
+                  <input 
+                    type="checkbox" 
+                    className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    checked={citaActiva.propuestaEnviada || false}
+                    onChange={(e) => actualizarGestion(citaActiva.id, 'propuestaEnviada', e.target.checked)}
+                  />
+                  ¿Se envió propuesta formal?
+                </label>
+                
+                {citaActiva.propuestaEnviada && (
+                  <div className="animate-fade-in">
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase flex items-center gap-1"><Mail size={12}/> Correo al que se envió</label>
+                    <input 
+                      type="email" 
+                      placeholder="ejemplo@empresa.com"
+                      className="w-full p-3 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-500" 
+                      value={citaActiva.correoPropuesta || ''} 
+                      onChange={(e) => actualizarGestion(citaActiva.id, 'correoPropuesta', e.target.value)}
+                    />
+                  </div>
+                )}
               </div>
 
               <div>
@@ -512,7 +536,6 @@ export default function CRMCapillas() {
               )}
             </div>
 
-            {/* Pie de la Ventana */}
             <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-3xl flex justify-between items-center">
               <span className="text-[10px] text-slate-400 flex items-center gap-1"><CheckCircle size={12}/> Guardado automático en Firebase</span>
               <button 
