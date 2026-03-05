@@ -26,7 +26,7 @@ const db = getFirestore(app);
 // =====================================================================
 // ⚠️ CABLE 2: AQUÍ VA EL LINK DE ZAPIER (Para el Google Calendar)
 // =====================================================================
-const LINK_WEBHOOK_ZAPIER = "https://hooks.zapier.com/hooks/catch/26692144/u076pbw/";
+const LINK_WEBHOOK_ZAPIER = "https://hooks.zapier.com/hooks/catch/26692144/u07hskk/";
 
 // ==========================================
 // DATOS DE CAPILLAS DE LA FE
@@ -118,7 +118,27 @@ export default function CRMCapillas() {
     mostrarNotificacion(`⚡ Avisando a Zapier para agendar en el Google Calendar de ${cita.asesor}...`);
     try {
       if(LINK_WEBHOOK_ZAPIER !== "PIDELE_A_ZAPIER_ESTE_LINK_Y_PEGALO_AQUI") {
-        await fetch(LINK_WEBHOOK_ZAPIER, { method: 'POST', body: JSON.stringify(cita), headers: { 'Content-Type': 'application/json' } });
+        
+        // --- MAGIA NUEVA: PREPARAMOS TODO PARA ZAPIER ---
+        const tituloParaCalendario = `${cita.asesor} - ${cita.cliente}`; 
+        
+        // Forzamos la hora a las 7:00 AM y que termine a las 8:00 AM (Hora Colombia -05:00)
+        // Usamos cita.seguimiento porque es la fecha nueva que puso el asesor
+        const horaInicio7AM = `${cita.seguimiento}T07:00:00-05:00`; 
+        const horaFin8AM = `${cita.seguimiento}T08:00:00-05:00`;
+
+        const datosParaZapier = {
+          ...cita,
+          zapierTitulo: tituloParaCalendario,
+          zapierInicio: horaInicio7AM,
+          zapierFin: horaFin8AM
+        };
+
+        await fetch(LINK_WEBHOOK_ZAPIER, { 
+          method: 'POST', 
+          body: JSON.stringify(datosParaZapier), 
+          headers: { 'Content-Type': 'application/json' } 
+        });
         mostrarNotificacion(`✅ Zapier completó la tarea. Copia enviada a Ana Carolina.`);
       }
     } catch (e) { console.error("Falta conectar Zapier", e); }
