@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { 
   UploadCloud, Calendar, Search, 
-  AlertCircle, Zap, Activity, Settings, Trash2, Bell, Download, PlusCircle, X, ChevronRight, CheckCircle, Clock, Mail, CheckSquare, User
+  AlertCircle, Zap, Activity, Settings, Trash2, Bell, Download, 
+  PlusCircle, X, ChevronRight, CheckCircle, Clock, Mail, CheckSquare, 
+  User, ListTodo, BarChart3, TrendingUp, PieChart
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -96,7 +98,6 @@ export default function CRMCapillas() {
     return filtradas;
   }, [citas, usuarioActual, esJefa, terminoBusqueda]);
 
-  // ALARMAS MEJORADAS
   const alarmas = useMemo(() => {
     const hoy = getHoy();
     const seguimientosUrgentes = citasFiltradas.filter(c => 
@@ -106,11 +107,53 @@ export default function CRMCapillas() {
     );
     const peligroGps = citasFiltradas.filter(c => {
       if (['cierre', 'no_cierre'].includes(c.estado)) return false;
-      // Calcula 25 días exactos desde la fecha de asignación original
       return new Date(c.fechaAsignacion) <= new Date(restarDias(hoy, 25));
     });
     return { seguimientosUrgentes, peligroGps };
   }, [citasFiltradas]);
+
+  // ==========================================
+  // LÓGICA DE LA NUEVA AGENDA
+  // ==========================================
+  const agendaAgrupada = useMemo(() => {
+    const grupos = {};
+    citasFiltradas.forEach(cita => {
+      // Ignoramos las cerradas en la agenda
+      if (['cierre', 'no_cierre'].includes(cita.estado)) return;
+      
+      const fechaClave = cita.seguimiento || cita.fechaVisita || 'Sin Fecha';
+      if (!grupos[fechaClave]) grupos[fechaClave] = [];
+      grupos[fechaClave].push(cita);
+    });
+    
+    // Ordenar las fechas de más antigua a más reciente
+    const fechasOrdenadas = Object.keys(grupos).sort((a, b) => {
+      if (a === 'Sin Fecha') return 1;
+      if (b === 'Sin Fecha') return -1;
+      return new Date(a) - new Date(b);
+    });
+
+    return { grupos, fechasOrdenadas };
+  }, [citasFiltradas]);
+
+  // ==========================================
+  // LÓGICA DE LAS MÉTRICAS (SOLO JEFA)
+  // ==========================================
+  const metricasAsesores = useMemo(() => {
+    return asesoresActivos.map(asesor => {
+      const citasDelAsesor = citas.filter(c => c.asesor === asesor);
+      const total = citasDelAsesor.length;
+      const nuevas = citasDelAsesor.filter(c => c.estado === 'asignada').length;
+      const seguimientos = citasDelAsesor.filter(c => ['seguimiento', 'reagendar'].includes(c.estado)).length;
+      const cierres = citasDelAsesor.filter(c => c.estado === 'cierre').length;
+      const perdidas = citasDelAsesor.filter(c => c.estado === 'no_cierre').length;
+      
+      // Cálculo de Efectividad (%)
+      const efectividad = total === 0 ? 0 : Math.round((cierres / total) * 100);
+
+      return { asesor, total, nuevas, seguimientos, cierres, perdidas, efectividad };
+    }).sort((a, b) => b.efectividad - a.efectividad); // Ordenar por los más efectivos
+  }, [citas, asesoresActivos]);
 
   const mostrarNotificacion = (mensaje, tiempo = 4000) => { setNotificacion(mensaje); setTimeout(() => setNotificacion(null), tiempo); };
 
@@ -118,7 +161,6 @@ export default function CRMCapillas() {
     mostrarNotificacion(`⚡ Avisando a Zapier para agendar en el Google Calendar de ${cita.asesor}...`);
     try {
       if(LINK_WEBHOOK_ZAPIER !== "PIDELE_A_ZAPIER_ESTE_LINK_Y_PEGALO_AQUI") {
-        
         const tituloParaCalendario = `${cita.asesor} - ${cita.cliente}`; 
         const horaInicio7AM = `${cita.seguimiento}T07:00:00-05:00`; 
         const horaFin8AM = `${cita.seguimiento}T08:00:00-05:00`;
@@ -130,7 +172,6 @@ export default function CRMCapillas() {
           zapierFin: horaFin8AM
         };
 
-        // MODO A PRUEBA DE BALAS: Enviar sin headers estrictos (evita el bloqueo CORS)
         await fetch(LINK_WEBHOOK_ZAPIER, { 
           method: 'POST', 
           body: JSON.stringify(datosParaZapier)
@@ -138,11 +179,11 @@ export default function CRMCapillas() {
         
         mostrarNotificacion(`✅ Zapier completó la tarea. Copia enviada al calendario.`);
       } else {
-        mostrarNotificacion("⚠️ Falta pegar el link de Zapier en la línea 31.");
+        mostrarNotificacion("⚠️ Falta pegar el link de Zapier en la línea 32.");
       }
     } catch (e) { 
       console.error("Error al conectar Zapier:", e); 
-      mostrarNotificacion("❌ Error: El navegador bloqueó el envío o el link está mal.");
+      mostrarNotificacion("❌ Error al conectar con Zapier.");
     }
   };
 
@@ -191,22 +232,38 @@ export default function CRMCapillas() {
     const archivo = document.getElementById('fileUpload').files[0];
     if (!archivo) return alert("Selecciona un archivo primero.");
     mostrarNotificacion("⏳ Leyendo archivo y asignando a asesores...", 3000);
+    
     const reader = new FileReader();
     reader.onload = async (event) => {
       const texto = event.target.result;
       const lineas = texto.split('\n');
       let cargadas = 0;
+      
       for (let i = 1; i < lineas.length; i++) {
         if (!lineas[i].trim()) continue;
         const columnas = lineas[i].split(','); 
         if (columnas.length >= 2) {
+          let fechaProgramada = getHoy();
+          if (columnas.length >= 3 && columnas[2].trim() !== '') {
+            fechaProgramada = columnas[2].trim();
+          }
           const nuevaCita = {
-            cliente: columnas[0].trim(), asesor: columnas[1].trim(), estado: 'asignada', fechaAsignacion: getHoy(), fechaVisita: getHoy(), seguimiento: '', notas: '', propuestaEnviada: false, correoPropuesta: '', ultimaModificacion: getHoy(), createdAt: Date.now() + i
+            cliente: columnas[0].trim(), 
+            asesor: columnas[1].trim(), 
+            estado: 'asignada', 
+            fechaAsignacion: getHoy(),
+            fechaVisita: fechaProgramada,
+            seguimiento: '', 
+            notas: '', 
+            propuestaEnviada: false, 
+            correoPropuesta: '', 
+            ultimaModificacion: getHoy(), 
+            createdAt: Date.now() + i
           };
           try { await addDoc(collection(db, 'citas_comerciales'), nuevaCita); cargadas++; } catch (e) { console.error(e); }
         }
       }
-      mostrarNotificacion(`✅ ${cargadas} clientes cargados por Excel.`);
+      mostrarNotificacion(`✅ ${cargadas} clientes cargados por Excel exitosamente.`);
       setVistaActual('dashboard');
     };
     reader.readAsText(archivo);
@@ -242,6 +299,34 @@ export default function CRMCapillas() {
     if (fechaClave === hoy) return { text: 'Para Hoy', color: 'bg-yellow-50 text-yellow-700 border-yellow-300' };
     return { text: 'A tiempo', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
   };
+
+  // Función auxiliar para dibujar tarjetas de empresas (usada en dashboard y agenda)
+  const TarjetaEmpresa = ({ cita, etiqueta }) => (
+    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-shadow flex flex-col overflow-hidden">
+      <div className="p-5 flex-grow">
+        <div className="flex justify-between items-start mb-2">
+          <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded border ${etiqueta.color}`}>{etiqueta.text}</span>
+          {esJefa && <span className="text-xs font-bold text-slate-400"><User size={12} className="inline mr-1"/>{cita.asesor}</span>}
+        </div>
+        {new Date(cita.fechaAsignacion) <= new Date(restarDias(getHoy(), 25)) && !['cierre', 'no_cierre'].includes(cita.estado) && (
+          <div className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded mb-2 flex items-center gap-1 w-max animate-pulse">
+            <AlertCircle size={12}/> ¡GPS en Riesgo (+25 Días)!
+          </div>
+        )}
+        <h3 className="font-bold text-lg text-slate-800 mb-1 truncate" title={cita.cliente}>{cita.cliente}</h3>
+        <div className="text-xs text-slate-500 space-y-1">
+          <p><Clock size={12} className="inline mr-1"/> Agendada para: <strong className="text-slate-700">{cita.seguimiento || cita.fechaVisita}</strong></p>
+          <p>Estado: {ESTADOS.find(e => e.id === cita.estado)?.label}</p>
+          {cita.propuestaEnviada && (
+            <p className="text-emerald-600 font-bold flex items-center gap-1 mt-1 bg-emerald-50 px-2 py-1 rounded w-max"><CheckSquare size={12}/> Propuesta Enviada</p>
+          )}
+        </div>
+      </div>
+      <button onClick={() => setCitaSeleccionada(cita.id)} className="w-full bg-slate-50 hover:bg-blue-50 text-blue-700 font-bold py-3 text-sm border-t border-slate-100 transition-colors flex justify-center items-center gap-1">
+        Gestionar Visita <ChevronRight size={16}/>
+      </button>
+    </div>
+  );
 
   if (cargando) return <div className="min-h-screen flex items-center justify-center font-bold text-blue-800">Cargando Motor CRM Capillas de la Fe...</div>;
 
@@ -285,10 +370,16 @@ export default function CRMCapillas() {
       <div className="flex flex-col md:flex-row max-w-7xl mx-auto w-full mt-6 gap-6 px-4">
         
         <aside className="w-full md:w-64 flex flex-col gap-2 shrink-0">
-          <button onClick={() => setVistaActual('dashboard')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'dashboard' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><Activity size={20}/> Monitor de Gestiones</button>
+          <button onClick={() => setVistaActual('dashboard')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'dashboard' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><Activity size={20}/> Monitor General</button>
           
+          {/* NUEVO BOTÓN: MI AGENDA */}
+          <button onClick={() => setVistaActual('agenda')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'agenda' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><ListTodo size={20}/> Mi Agenda</button>
+
           {esJefa && (
             <>
+              {/* NUEVO BOTÓN: MÉTRICAS */}
+              <button onClick={() => setVistaActual('metricas')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'metricas' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><BarChart3 size={20}/> Reportes y Métricas</button>
+              
               <button onClick={() => setVistaActual('cargar')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'cargar' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><UploadCloud size={20}/> Asignar Citas</button>
               <button onClick={() => setVistaActual('config')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'config' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100 shadow-sm border border-slate-200'}`}><Settings size={20}/> Equipo y Asesores</button>
             </>
@@ -306,6 +397,127 @@ export default function CRMCapillas() {
 
         <main className="flex-1 min-w-0">
           
+          {/* ======================================================= */}
+          {/* VISTA 1: MÉTRICAS Y RENDIMIENTO (NUEVO)                 */}
+          {/* ======================================================= */}
+          {vistaActual === 'metricas' && esJefa && (
+             <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200">
+               <div className="flex items-center gap-3 mb-6 border-b pb-4">
+                 <div className="bg-blue-100 p-3 rounded-full"><TrendingUp className="text-blue-600" size={24}/></div>
+                 <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Rendimiento Comercial</h2>
+                    <p className="text-sm text-slate-500">Métricas en tiempo real de tu equipo de asesores.</p>
+                 </div>
+               </div>
+
+               <div className="overflow-x-auto">
+                 <table className="w-full text-left border-collapse">
+                   <thead>
+                     <tr className="bg-slate-50 text-slate-600 text-sm uppercase tracking-wider border-b border-slate-200">
+                       <th className="p-4 font-bold rounded-tl-xl">Asesor</th>
+                       <th className="p-4 font-bold text-center">Total Asignadas</th>
+                       <th className="p-4 font-bold text-center">Nuevas</th>
+                       <th className="p-4 font-bold text-center">En Seguimiento</th>
+                       <th className="p-4 font-bold text-center text-red-600">Perdidas</th>
+                       <th className="p-4 font-bold text-center text-emerald-600">Cierres</th>
+                       <th className="p-4 font-bold text-center rounded-tr-xl">% Efectividad</th>
+                     </tr>
+                   </thead>
+                   <tbody className="divide-y divide-slate-100">
+                     {metricasAsesores.map((metrica, index) => (
+                       <tr key={metrica.asesor} className="hover:bg-slate-50 transition-colors">
+                         <td className="p-4 font-bold text-slate-800 flex items-center gap-2">
+                           <span className="text-slate-400 text-xs">#{index + 1}</span> {metrica.asesor}
+                         </td>
+                         <td className="p-4 text-center font-medium text-slate-600">{metrica.total}</td>
+                         <td className="p-4 text-center font-medium text-blue-600 bg-blue-50/50">{metrica.nuevas}</td>
+                         <td className="p-4 text-center font-medium text-yellow-600 bg-yellow-50/50">{metrica.seguimientos}</td>
+                         <td className="p-4 text-center font-medium text-red-500">{metrica.perdidas}</td>
+                         <td className="p-4 text-center font-bold text-emerald-600 bg-emerald-50/50">{metrica.cierres}</td>
+                         <td className="p-4 text-center">
+                           <div className="flex items-center justify-center gap-2">
+                             <div className="w-full bg-slate-200 rounded-full h-2.5 max-w-[60px]">
+                               <div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: `${metrica.efectividad}%` }}></div>
+                             </div>
+                             <span className="font-bold text-slate-700 text-sm">{metrica.efectividad}%</span>
+                           </div>
+                         </td>
+                       </tr>
+                     ))}
+                   </tbody>
+                 </table>
+               </div>
+               <div className="mt-6 bg-slate-50 p-4 rounded-xl text-sm text-slate-500 flex items-start gap-2 border border-slate-200">
+                 <PieChart size={18} className="shrink-0 text-slate-400"/>
+                 <p><strong>Nota:</strong> El % de Efectividad se calcula dividiendo los Cierres Exitosos entre el Total de Empresas Asignadas al asesor. Las empresas "Perdidas" o "Nuevas" disminuyen el porcentaje.</p>
+               </div>
+             </div>
+          )}
+
+          {/* ======================================================= */}
+          {/* VISTA 2: MI AGENDA (NUEVO)                              */}
+          {/* ======================================================= */}
+          {vistaActual === 'agenda' && (
+             <div className="space-y-8">
+               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-4 gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-slate-800">Agenda de Trabajo</h2>
+                    <p className="text-sm text-slate-500">
+                      {esJefa ? `Viendo los compromisos de: ${usuarioActual}` : 'Tus próximos seguimientos organizados por fecha.'}
+                    </p>
+                  </div>
+               </div>
+
+               {agendaAgrupada.fechasOrdenadas.length === 0 ? (
+                 <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-16 text-center text-slate-500">
+                   <Calendar className="mx-auto mb-4 opacity-30" size={60}/> 
+                   <h3 className="text-xl font-bold text-slate-700 mb-1">Agenda Despejada</h3>
+                   <p>No hay seguimientos ni visitas programadas pendientes.</p>
+                 </div>
+               ) : (
+                 agendaAgrupada.fechasOrdenadas.map(fecha => {
+                   const citasDelDia = agendaAgrupada.grupos[fecha];
+                   
+                   // Determinar si es un día especial (Atrasado, Hoy o Futuro)
+                   let estiloCabecera = "bg-slate-200 text-slate-700";
+                   let iconoCabecera = <Calendar size={18} />;
+                   let textoFecha = fecha;
+
+                   if (fecha !== 'Sin Fecha') {
+                     if (fecha < getHoy()) {
+                       estiloCabecera = "bg-red-100 text-red-800 border-l-4 border-red-500";
+                       textoFecha = `${fecha} (Atrasado)`;
+                       iconoCabecera = <AlertCircle size={18} />;
+                     } else if (fecha === getHoy()) {
+                       estiloCabecera = "bg-yellow-100 text-yellow-800 border-l-4 border-yellow-500 font-bold";
+                       textoFecha = `HOY - ${fecha}`;
+                       iconoCabecera = <Zap size={18} className="text-yellow-600"/>;
+                     } else {
+                       estiloCabecera = "bg-blue-50 text-blue-800 border-l-4 border-blue-500";
+                     }
+                   }
+
+                   return (
+                     <div key={fecha} className="mb-8">
+                       <div className={`flex items-center gap-2 p-3 rounded-lg mb-4 ${estiloCabecera}`}>
+                         {iconoCabecera}
+                         <h3 className="text-lg font-bold">{textoFecha}</h3>
+                         <span className="ml-auto bg-white/50 px-2 py-1 rounded text-xs font-bold">{citasDelDia.length} tareas</span>
+                       </div>
+                       
+                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                         {citasDelDia.map(cita => (
+                           <TarjetaEmpresa key={cita.id} cita={cita} etiqueta={obtenerEtiquetaVisual(cita)} />
+                         ))}
+                       </div>
+                     </div>
+                   );
+                 })
+               )}
+             </div>
+          )}
+
+          {/* VISTAS ANTERIORES (Configuración, Carga, Dashboard Principal) */}
           {vistaActual === 'config' && esJefa && (
             <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200">
               <h2 className="text-2xl font-bold border-b pb-4 mb-6">Gestión de Asesores</h2>
@@ -332,7 +544,6 @@ export default function CRMCapillas() {
 
           {vistaActual === 'cargar' && esJefa && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              
               <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 relative overflow-hidden">
                 <div className="absolute top-0 right-0 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">UNO A UNO</div>
                 <h2 className="text-2xl font-bold mb-2 flex items-center gap-2 text-slate-800"><PlusCircle className="text-blue-600"/> Agendar Visita</h2>
@@ -367,19 +578,19 @@ export default function CRMCapillas() {
                  <div className="absolute top-0 right-0 bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">MASIVO</div>
                 <UploadCloud size={50} className="mx-auto text-emerald-600 mb-4" />
                 <h2 className="text-2xl font-bold mb-2 text-slate-800">Carga Rápida (CSV)</h2>
-                <p className="text-slate-500 mb-6 text-sm">Ideal para inicio de mes. Sube un archivo con "Empresa" y "Asesor". La visita quedará agendada para hoy por defecto.</p>
+                <p className="text-slate-500 mb-6 text-sm">
+                  Sube un archivo con 3 columnas: <strong>Empresa</strong>, <strong>Asesor</strong> y <strong>Fecha</strong> (Formato: YYYY-MM-DD). Si dejas la fecha en blanco, se agendará para hoy por defecto.
+                </p>
                 <form onSubmit={procesarArchivoCSV} className="max-w-md mx-auto p-6 bg-white border-2 border-dashed border-emerald-300 rounded-xl w-full">
                   <input type="file" id="fileUpload" accept=".csv" required className="w-full mb-4 text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer" />
                   <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-3 rounded-xl font-bold shadow-md shadow-emerald-200">Subir Citas</button>
                 </form>
               </div>
-
             </div>
           )}
 
           {vistaActual === 'dashboard' && (
             <div className="space-y-6">
-              
               {(alarmas.seguimientosUrgentes.length > 0 || (esJefa && alarmas.peligroGps.length > 0)) && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {alarmas.seguimientosUrgentes.length > 0 && (
@@ -399,8 +610,8 @@ export default function CRMCapillas() {
 
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-2 gap-4">
                 <div>
-                  <h2 className="text-2xl font-bold text-slate-800">{esJefa ? 'Todas las Gestiones' : 'Mis Empresas Asignadas'}</h2>
-                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-bold mt-1 inline-block">{citasFiltradas.length} Registros</span>
+                  <h2 className="text-2xl font-bold text-slate-800">{esJefa ? 'Monitor General' : 'Todas mis empresas'}</h2>
+                  <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-bold mt-1 inline-block">Lista Completa ({citasFiltradas.length})</span>
                 </div>
                 {esJefa && (
                   <button onClick={exportarAExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-sm">
@@ -417,49 +628,9 @@ export default function CRMCapillas() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {citasFiltradas.map(cita => {
-                    const etiqueta = obtenerEtiquetaVisual(cita);
-                    return (
-                      <div key={cita.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-shadow flex flex-col overflow-hidden">
-                        
-                        <div className="p-5 flex-grow">
-                          <div className="flex justify-between items-start mb-2">
-                            <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded border ${etiqueta.color}`}>
-                              {etiqueta.text}
-                            </span>
-                            {esJefa && <span className="text-xs font-bold text-slate-400"><User size={12} className="inline mr-1"/>{cita.asesor}</span>}
-                          </div>
-
-                          {/* ALERTA DE 25 DÍAS EN LA TARJETA */}
-                          {new Date(cita.fechaAsignacion) <= new Date(restarDias(getHoy(), 25)) && !['cierre', 'no_cierre'].includes(cita.estado) && (
-                            <div className="bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded mb-2 flex items-center gap-1 w-max animate-pulse">
-                              <AlertCircle size={12}/> ¡GPS en Riesgo (+25 Días)!
-                            </div>
-                          )}
-
-                          <h3 className="font-bold text-lg text-slate-800 mb-1 truncate" title={cita.cliente}>{cita.cliente}</h3>
-                          <div className="text-xs text-slate-500 space-y-1">
-                            <p><Clock size={12} className="inline mr-1"/> Agendada para: <strong className="text-slate-700">{cita.fechaVisita}</strong></p>
-                            <p>Estado: {ESTADOS.find(e => e.id === cita.estado)?.label}</p>
-                            
-                            {/* BADGE DE PROPUESTA */}
-                            {cita.propuestaEnviada && (
-                              <p className="text-emerald-600 font-bold flex items-center gap-1 mt-1 bg-emerald-50 px-2 py-1 rounded w-max">
-                                <CheckSquare size={12}/> Propuesta Enviada
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                        
-                        <button 
-                          onClick={() => setCitaSeleccionada(cita.id)}
-                          className="w-full bg-slate-50 hover:bg-blue-50 text-blue-700 font-bold py-3 text-sm border-t border-slate-100 transition-colors flex justify-center items-center gap-1"
-                        >
-                          Gestionar Visita <ChevronRight size={16}/>
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {citasFiltradas.map(cita => (
+                    <TarjetaEmpresa key={cita.id} cita={cita} etiqueta={obtenerEtiquetaVisual(cita)} />
+                  ))}
                 </div>
               )}
             </div>
@@ -512,7 +683,6 @@ export default function CRMCapillas() {
                 </div>
               </div>
 
-              {/* SECCIÓN NUEVA: ENVÍO DE PROPUESTA */}
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer mb-3">
                   <input 
