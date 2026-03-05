@@ -145,22 +145,6 @@ export default function CRMCapillas() {
       mostrarNotificacion("❌ Error: El navegador bloqueó el envío o el link está mal.");
     }
   };
-        const datosParaZapier = {
-          ...cita,
-          zapierTitulo: tituloParaCalendario,
-          zapierInicio: horaInicio7AM,
-          zapierFin: horaFin8AM
-        };
-
-        await fetch(LINK_WEBHOOK_ZAPIER, { 
-          method: 'POST', 
-          body: JSON.stringify(datosParaZapier), 
-          headers: { 'Content-Type': 'application/json' } 
-        });
-        mostrarNotificacion(`✅ Zapier completó la tarea. Copia enviada a Ana Carolina.`);
-      }
-    } catch (e) { console.error("Falta conectar Zapier", e); }
-  };
 
   const exportarAExcel = () => {
     const encabezados = ['Empresa', 'Asesor', 'Estado Actual', 'Fecha Asignacion', 'Fecha Programada Visita', 'Fecha Siguiente Seguimiento', 'Notas / Avances', 'Propuesta Enviada', 'Correo de Propuesta'];
