@@ -13,11 +13,12 @@ import { getFirestore, collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc
 // =====================================================================
 const firebaseConfig = {
   apiKey: "AIzaSyCTrJeO9uPDpw3OhbGTSEHYzdX6ALsakY4",
-  authDomain: "tu-proyecto.firebaseapp.com",
-  projectId: "tu-proyecto",
-  storageBucket: "tu-proyecto.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:12345:web:abcde"
+  authDomain: "crm-capillas.firebaseapp.com",
+  projectId: "crm-capillas",
+  storageBucket: "crm-capillas.firebasestorage.app",
+  messagingSenderId: "1046562415612",
+  appId: "1:1046562415612:web:7bdb7f1778337ee0a98879"
+
 };
 
 const app = initializeApp(firebaseConfig);
