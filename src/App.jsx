@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   UploadCloud, Calendar, User, Search, CheckCircle, 
   Clock, AlertCircle, Zap, Activity, Users, LogOut,
-  Settings, UserPlus, Trash2, CheckSquare, Bell, Download
+  Settings, UserPlus, Trash2, CheckSquare, Bell, Download, PlusCircle
 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
@@ -18,7 +18,6 @@ const firebaseConfig = {
   storageBucket: "crm-capillas.firebasestorage.app",
   messagingSenderId: "1046562415612",
   appId: "1:1046562415612:web:7bdb7f1778337ee0a98879"
-
 };
 
 const app = initializeApp(firebaseConfig);
@@ -31,7 +30,7 @@ const db = getFirestore(app);
 const LINK_WEBHOOK_ZAPIER = "PIDELE_A_ZAPIER_ESTE_LINK_Y_PEGALO_AQUI";
 
 // ==========================================
-// DATOS DE CAPILLAS DE LA FE EXACTOS
+// DATOS DE CAPILLAS DE LA FE
 // ==========================================
 const JEFA = { nombre: "Ana Carolina Ramirez", correo: "directoracomercial01@capillasdelafe.com", rol: "Directora Comercial" };
 const ASESORES_INICIALES = [
@@ -61,6 +60,9 @@ export default function CRMCapillas() {
   const [nuevoAsesor, setNuevoAsesor] = useState("");
   const [terminoBusqueda, setTerminoBusqueda] = useState("");
 
+  // Estado para el formulario manual
+  const [formManual, setFormManual] = useState({ cliente: '', asesor: ASESORES_INICIALES[0], notas: '' });
+
   // Conexión a Base de Datos
   useEffect(() => {
     signInAnonymously(auth).catch(console.error);
@@ -83,7 +85,6 @@ export default function CRMCapillas() {
     return () => unsubscribe();
   }, [user]);
 
-  // Permisos y Filtros
   const esJefa = usuarioActual === JEFA.nombre;
   const usuariosDisponibles = useMemo(() => [JEFA.nombre, ...asesoresActivos], [asesoresActivos]);
 
@@ -97,7 +98,6 @@ export default function CRMCapillas() {
     return filtradas;
   }, [citas, usuarioActual, esJefa, terminoBusqueda]);
 
-  // Regla de 25 Días y Seguimientos
   const alarmas = useMemo(() => {
     const hoy = getHoy();
     const seguimientosUrgentes = citasFiltradas.filter(c => c.seguimiento && c.seguimiento <= hoy && !['cierre', 'no_cierre'].includes(c.estado));
@@ -110,49 +110,55 @@ export default function CRMCapillas() {
 
   const mostrarNotificacion = (mensaje, tiempo = 4000) => { setNotificacion(mensaje); setTimeout(() => setNotificacion(null), tiempo); };
 
-  // LA CONEXIÓN REAL CON ZAPIER
   const notificarAZapier = async (cita) => {
     mostrarNotificacion(`⚡ Avisando a Zapier para agendar en el Google Calendar de ${cita.asesor}...`);
     try {
       if(LINK_WEBHOOK_ZAPIER !== "PIDELE_A_ZAPIER_ESTE_LINK_Y_PEGALO_AQUI") {
-        await fetch(LINK_WEBHOOK_ZAPIER, {
-          method: 'POST', body: JSON.stringify(cita),
-          headers: { 'Content-Type': 'application/json' }
-        });
+        await fetch(LINK_WEBHOOK_ZAPIER, { method: 'POST', body: JSON.stringify(cita), headers: { 'Content-Type': 'application/json' } });
         mostrarNotificacion(`✅ Zapier completó la tarea. Copia enviada a Ana Carolina.`);
       }
     } catch (e) { console.error("Falta conectar Zapier", e); }
   };
 
-  // 📥 EXPORTAR A EXCEL (NUEVA FUNCIÓN)
   const exportarAExcel = () => {
     const encabezados = ['Empresa', 'Asesor', 'Estado Actual', 'Fecha de Carga', 'Fecha Siguiente Seguimiento', 'Notas / Avances', 'Última Edición'];
-    
     const filas = citasFiltradas.map(c => [
-      `"${c.cliente}"`,
-      `"${c.asesor}"`,
-      `"${ESTADOS.find(e => e.id === c.estado)?.label || c.estado}"`,
-      `"${c.fechaCita}"`,
-      `"${c.seguimiento}"`,
-      `"${(c.notas || '').replace(/"/g, '""')}"`, // Limpia comillas para no romper el Excel
-      `"${c.ultimaModificacion}"`
+      `"${c.cliente}"`, `"${c.asesor}"`, `"${ESTADOS.find(e => e.id === c.estado)?.label || c.estado}"`, `"${c.fechaCita}"`, `"${c.seguimiento}"`, `"${(c.notas || '').replace(/"/g, '""')}"`, `"${c.ultimaModificacion}"`
     ]);
-
     const csvContent = [encabezados.join(','), ...filas.map(f => f.join(','))].join('\n');
-    
-    // El \uFEFF asegura que los acentos se vean bien en Excel
     const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' }); 
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.setAttribute("download", `Reporte_Gestiones_Capillas_${getHoy()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    mostrarNotificacion("📊 Reporte descargado exitosamente en Excel.");
+    link.setAttribute("download", `Reporte_Capillas_${getHoy()}.csv`);
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    mostrarNotificacion("📊 Reporte descargado exitosamente.");
   };
 
-  // LECTURA REAL DE ARCHIVO CSV (EXCEL)
+  // 1. CARGA MANUAL DE CLIENTE
+  const guardarCitaManual = async (e) => {
+    e.preventDefault();
+    if (!formManual.cliente.trim() || !formManual.asesor) return;
+    mostrarNotificacion("⏳ Registrando empresa manualmente...");
+    
+    const nuevaCita = {
+      cliente: formManual.cliente.trim(),
+      asesor: formManual.asesor,
+      estado: 'asignada',
+      fechaCita: getHoy(),
+      seguimiento: '',
+      notas: formManual.notas.trim(),
+      ultimaModificacion: getHoy(),
+      createdAt: Date.now()
+    };
+    
+    try {
+      await addDoc(collection(db, 'citas_comerciales'), nuevaCita);
+      mostrarNotificacion(`✅ Empresa ${nuevaCita.cliente} asignada a ${nuevaCita.asesor}.`);
+      setFormManual({ cliente: '', asesor: asesoresActivos[0], notas: '' }); // Limpiar formulario
+    } catch (e) { console.error(e); alert("Error al guardar."); }
+  };
+
+  // 2. CARGA MASIVA (EXCEL CSV)
   const procesarArchivoCSV = (e) => {
     e.preventDefault();
     const archivo = document.getElementById('fileUpload').files[0];
@@ -164,25 +170,17 @@ export default function CRMCapillas() {
       const texto = event.target.result;
       const lineas = texto.split('\n');
       let cargadas = 0;
-      
       for (let i = 1; i < lineas.length; i++) {
         if (!lineas[i].trim()) continue;
         const columnas = lineas[i].split(','); 
         if (columnas.length >= 2) {
           const nuevaCita = {
-            cliente: columnas[0].trim(),
-            asesor: columnas[1].trim(),
-            estado: 'asignada',
-            fechaCita: getHoy(),
-            seguimiento: '',
-            notas: '',
-            ultimaModificacion: getHoy(),
-            createdAt: Date.now() + i
+            cliente: columnas[0].trim(), asesor: columnas[1].trim(), estado: 'asignada', fechaCita: getHoy(), seguimiento: '', notas: '', ultimaModificacion: getHoy(), createdAt: Date.now() + i
           };
           try { await addDoc(collection(db, 'citas_comerciales'), nuevaCita); cargadas++; } catch (e) { console.error(e); }
         }
       }
-      mostrarNotificacion(`✅ ${cargadas} clientes cargados y asignados exitosamente.`);
+      mostrarNotificacion(`✅ ${cargadas} clientes cargados por Excel.`);
       setVistaActual('dashboard');
     };
     reader.readAsText(archivo);
@@ -196,7 +194,7 @@ export default function CRMCapillas() {
         const citaModificada = citas.find(c => c.id === id);
         notificarAZapier({ ...citaModificada, [campo]: valor });
       }
-    } catch (e) { alert("Error al guardar. Revisa Firebase."); }
+    } catch (e) { alert("Error al guardar."); }
   };
 
   const eliminarCita = async (id) => { if(window.confirm("¿Eliminar registro para siempre?")) await deleteDoc(doc(db, 'citas_comerciales', id)); };
@@ -252,7 +250,7 @@ export default function CRMCapillas() {
           
           {esJefa && (
             <>
-              <button onClick={() => setVistaActual('cargar')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'cargar' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100'}`}><UploadCloud size={20}/> Cargar Citas (CSV)</button>
+              <button onClick={() => setVistaActual('cargar')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'cargar' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100'}`}><UploadCloud size={20}/> Asignar Citas</button>
               <button onClick={() => setVistaActual('config')} className={`p-3 rounded-xl font-bold flex items-center gap-3 transition-all ${vistaActual === 'config' ? 'bg-blue-100 text-blue-800 shadow border border-blue-200' : 'bg-white hover:bg-slate-100'}`}><Settings size={20}/> Equipo y Asesores</button>
             </>
           )}
@@ -295,16 +293,47 @@ export default function CRMCapillas() {
             </div>
           )}
 
-          {/* VISTA: CARGAR EXCEL */}
+          {/* VISTA: CARGAR / ASIGNAR CITAS (ACTUALIZADA CON DOS OPCIONES) */}
           {vistaActual === 'cargar' && esJefa && (
-            <div className="bg-white rounded-2xl p-10 text-center shadow border">
-              <UploadCloud size={50} className="mx-auto text-blue-600 mb-4" />
-              <h2 className="text-2xl font-bold mb-2">Cargar Citas Diarias</h2>
-              <p className="text-slate-500 mb-6">Sube un archivo .CSV que tenga 2 columnas: "Nombre de la Empresa" y "Nombre del Asesor".</p>
-              <form onSubmit={procesarArchivoCSV} className="max-w-md mx-auto p-6 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl">
-                <input type="file" id="fileUpload" accept=".csv" required className="w-full mb-4 text-sm" />
-                <button type="submit" className="w-full bg-blue-700 hover:bg-blue-800 text-white px-8 py-3 rounded-xl font-bold">Subir y Asignar Citas</button>
-              </form>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* OPCIÓN 1: MANUAL */}
+              <div className="bg-white rounded-2xl p-8 shadow border border-slate-200 relative overflow-hidden">
+                <div className="absolute top-0 right-0 bg-blue-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">UNO A UNO</div>
+                <h2 className="text-2xl font-bold mb-2 flex items-center gap-2 text-slate-800"><PlusCircle className="text-blue-600"/> Registro Manual</h2>
+                <p className="text-slate-500 text-sm mb-6">Ingresa una nueva empresa y asígnala directamente a un asesor.</p>
+                
+                <form onSubmit={guardarCitaManual} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Nombre de la Empresa / Cliente</label>
+                    <input type="text" required placeholder="Ej. Constructora Andina" className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" value={formManual.cliente} onChange={e => setFormManual({...formManual, cliente: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Asignar a Asesor</label>
+                    <select className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 font-bold text-slate-700 bg-slate-50" value={formManual.asesor} onChange={e => setFormManual({...formManual, asesor: e.target.value})}>
+                      {asesoresActivos.map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1 uppercase">Notas iniciales (Opcional)</label>
+                    <textarea rows="2" placeholder="Ej. Tienen interés en los planes corporativos..." className="w-full p-3 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500" value={formManual.notas} onChange={e => setFormManual({...formManual, notas: e.target.value})}></textarea>
+                  </div>
+                  <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold transition-colors">Guardar y Asignar</button>
+                </form>
+              </div>
+
+              {/* OPCIÓN 2: EXCEL MASIVO */}
+              <div className="bg-slate-50 rounded-2xl p-8 shadow-inner border border-slate-200 text-center flex flex-col justify-center relative overflow-hidden">
+                 <div className="absolute top-0 right-0 bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded-bl-lg">MASIVO</div>
+                <UploadCloud size={50} className="mx-auto text-emerald-600 mb-4" />
+                <h2 className="text-2xl font-bold mb-2 text-slate-800">Cargar Excel (CSV)</h2>
+                <p className="text-slate-500 mb-6 text-sm">Ideal para la carga del día. Sube un archivo con 2 columnas: "Empresa" y "Asesor".</p>
+                <form onSubmit={procesarArchivoCSV} className="max-w-md mx-auto p-6 bg-white border-2 border-dashed border-emerald-300 rounded-xl w-full">
+                  <input type="file" id="fileUpload" accept=".csv" required className="w-full mb-4 text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 cursor-pointer" />
+                  <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-3 rounded-xl font-bold shadow-md shadow-emerald-200">Subir Citas</button>
+                </form>
+              </div>
+
             </div>
           )}
 
@@ -350,13 +379,8 @@ export default function CRMCapillas() {
                   <h2 className="text-2xl font-bold text-slate-800">{esJefa ? 'Todas las Gestiones' : 'Mis Empresas'}</h2>
                   <span className="bg-slate-200 px-3 py-1 rounded-full text-sm font-bold mt-1 inline-block">{citasFiltradas.length} Registros</span>
                 </div>
-                
-                {/* BOTÓN EXPORTAR A EXCEL (SOLO PARA JEFA) */}
                 {esJefa && (
-                  <button 
-                    onClick={exportarAExcel}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-sm"
-                  >
+                  <button onClick={exportarAExcel} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition-colors shadow-sm">
                     <Download size={18} /> Exportar a Excel
                   </button>
                 )}
