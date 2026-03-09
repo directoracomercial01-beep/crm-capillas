@@ -28,7 +28,7 @@ const db = getFirestore(app);
 // =====================================================================
 // ⚠️ CABLE 2: AQUÍ VA EL LINK DE ZAPIER
 // =====================================================================
-const LINK_WEBHOOK_ZAPIER = "https://hooks.zapier.com/hooks/catch/26692144/u07hskk/";
+const LINK_WEBHOOK_ZAPIER = "https://hooks.zapier.com/hooks/catch/26692144/u07hskk"
 
 // =====================================================================
 // 🔒 CABLE 3: TU CLAVE DE SEGURIDAD (Cámbiala por la que quieras)
@@ -100,7 +100,6 @@ export default function CRMCapillas() {
   const citasFiltradas = useMemo(() => {
     let filtradas = citas;
     if (!esJefa) {
-      // MAGIA: El asesor NO VE las empresas que devolvió al Call Center
       filtradas = filtradas.filter(c => c.asesor === usuarioActual && c.estado !== 'reagendar');
     }
     if (terminoBusqueda) {
@@ -127,7 +126,6 @@ export default function CRMCapillas() {
   const agendaAgrupada = useMemo(() => {
     const grupos = {};
     citasFiltradas.forEach(cita => {
-      // Ignorar cierres y reasignaciones en la agenda
       if (['cierre', 'no_cierre', 'reagendar'].includes(cita.estado)) return;
       const fechaClave = cita.seguimiento || cita.fechaVisita || 'Sin Fecha';
       if (!grupos[fechaClave]) grupos[fechaClave] = [];
@@ -143,15 +141,18 @@ export default function CRMCapillas() {
 
   const metricasAsesores = useMemo(() => {
     return asesoresActivos.map(asesor => {
-      // MAGIA: Excluimos las devueltas ('reagendar') del cálculo para no perjudicar al asesor
       const citasDelAsesor = citas.filter(c => c.asesor === asesor && c.estado !== 'reagendar');
       const total = citasDelAsesor.length;
       const nuevas = citasDelAsesor.filter(c => c.estado === 'asignada').length;
       const seguimientos = citasDelAsesor.filter(c => c.estado === 'seguimiento').length;
       const cierres = citasDelAsesor.filter(c => c.estado === 'cierre').length;
       const perdidas = citasDelAsesor.filter(c => c.estado === 'no_cierre').length;
+      
+      // MAGIA: Aquí contamos las propuestas enviadas
+      const propuestas = citasDelAsesor.filter(c => c.propuestaEnviada).length;
+
       const efectividad = total === 0 ? 0 : Math.round((cierres / total) * 100);
-      return { asesor, total, nuevas, seguimientos, cierres, perdidas, efectividad };
+      return { asesor, total, nuevas, seguimientos, propuestas, cierres, perdidas, efectividad };
     }).sort((a, b) => b.efectividad - a.efectividad); 
   }, [citas, asesoresActivos]);
 
@@ -274,7 +275,6 @@ export default function CRMCapillas() {
         notificarAZapier({ ...citaModificada, [campo]: valor });
       }
 
-      // --- MAGIA: Cerrar ventana si el asesor devuelve la empresa ---
       if (campo === 'estado' && valor === 'reagendar') {
         setCitaSeleccionada(null);
         mostrarNotificacion("⏳ Empresa devuelta. Esperando revisión de Jefatura.");
@@ -282,7 +282,6 @@ export default function CRMCapillas() {
     } catch (e) { alert("Error al guardar."); }
   };
 
-  // --- LÓGICA DE SEGURIDAD PARA EL BOTÓN DE PAPELERA (SOLO JEFA) ---
   const eliminarCita = async (id) => { 
     const intento = window.prompt("🔒 Acción de Jefatura.\n\nIngresa tu PIN de seguridad para borrar esta empresa definitivamente:");
     if (intento === PIN_SECRETO) {
@@ -451,6 +450,7 @@ export default function CRMCapillas() {
                        <th className="p-4 font-bold text-center">Total Asignadas</th>
                        <th className="p-4 font-bold text-center">Nuevas</th>
                        <th className="p-4 font-bold text-center">En Seguimiento</th>
+                       <th className="p-4 font-bold text-center text-purple-600">Propuestas</th>
                        <th className="p-4 font-bold text-center text-red-600">Perdidas</th>
                        <th className="p-4 font-bold text-center text-emerald-600">Cierres</th>
                        <th className="p-4 font-bold text-center rounded-tr-xl">% Efectividad</th>
@@ -465,6 +465,7 @@ export default function CRMCapillas() {
                          <td className="p-4 text-center font-medium text-slate-600">{metrica.total}</td>
                          <td className="p-4 text-center font-medium text-blue-600 bg-blue-50/50">{metrica.nuevas}</td>
                          <td className="p-4 text-center font-medium text-yellow-600 bg-yellow-50/50">{metrica.seguimientos}</td>
+                         <td className="p-4 text-center font-bold text-purple-600 bg-purple-50/50">{metrica.propuestas}</td>
                          <td className="p-4 text-center font-medium text-red-500">{metrica.perdidas}</td>
                          <td className="p-4 text-center font-bold text-emerald-600 bg-emerald-50/50">{metrica.cierres}</td>
                          <td className="p-4 text-center">
